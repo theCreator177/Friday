@@ -30,7 +30,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import anthropic
 import httpx
@@ -52,6 +52,7 @@ from memory import (
 from notes_access import get_recent_notes, read_note, search_notes_apple, create_apple_note
 from dispatch_registry import DispatchRegistry
 from planner import TaskPlanner, detect_planning_mode, BYPASS_PHRASES
+from llm_provider import build_client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 log = logging.getLogger("jarvis")
@@ -1161,7 +1162,10 @@ async def generate_response(
 
 # Shared state
 task_manager = ClaudeTaskManager(max_concurrent=3)
-anthropic_client: Optional[anthropic.AsyncAnthropic] = None
+# Either an anthropic.AsyncAnthropic or an llm_provider.LocalLLMClient — both
+# expose the same .messages.create(...) surface, so call sites don't branch.
+anthropic_client: Optional[Any] = None
+llm_provider: str = "anthropic"
 cached_projects: list[dict] = []
 recently_built: list[dict] = []  # [{"name": str, "path": str, "time": float}]
 dispatch_registry = DispatchRegistry()
@@ -1214,6 +1218,10 @@ def _get_usage_for_period(seconds: float | None = None) -> dict:
 
 
 def _cost_from_tokens(input_t: int, output_t: int) -> float:
+    # A locally served model costs nothing per token — reporting API pricing
+    # for it would make the usage summary actively misleading.
+    if llm_provider == "local":
+        return 0.0
     return (input_t / 1_000_000) * 0.80 + (output_t / 1_000_000) * 4.00
 
 
@@ -1336,11 +1344,13 @@ return windowList
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    global anthropic_client, cached_projects
-    if ANTHROPIC_API_KEY:
-        anthropic_client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
-    else:
-        log.warning("ANTHROPIC_API_KEY not set — LLM features disabled")
+    global anthropic_client, cached_projects, llm_provider
+    anthropic_client, llm_provider = build_client(ANTHROPIC_API_KEY)
+    if anthropic_client is None:
+        if llm_provider == "local":
+            log.warning("LLM_PROVIDER=local but LOCAL_LLM_MODEL is unset — LLM features disabled")
+        else:
+            log.warning("ANTHROPIC_API_KEY not set — LLM features disabled")
     cached_projects = []
 
     # Start context refresh in a separate thread (never touches event loop)
