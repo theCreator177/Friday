@@ -25,7 +25,9 @@ from llm_provider import (  # noqa: E402
 
 
 def run(coro):
-    return asyncio.get_event_loop_policy().new_event_loop().run_until_complete(coro)
+    # asyncio.run closes the loop it creates; hand-rolled new_event_loop() calls
+    # leak one per test and surface as "coroutine was never awaited" warnings.
+    return asyncio.run(coro)
 
 
 class FlattenContentTest(unittest.TestCase):

@@ -53,6 +53,9 @@ from notes_access import get_recent_notes, read_note, search_notes_apple, create
 from dispatch_registry import DispatchRegistry
 from planner import TaskPlanner, detect_planning_mode, BYPASS_PHRASES
 from llm_provider import build_client
+from qa import QAAgent
+from suggestions import suggest_followup
+from tracking import SuccessTracker
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 log = logging.getLogger("jarvis")
@@ -1248,6 +1251,13 @@ llm_provider: str = "anthropic"
 cached_projects: list[dict] = []
 recently_built: list[dict] = []  # [{"name": str, "path": str, "time": float}]
 dispatch_registry = DispatchRegistry()
+
+# Auto-QA pipeline. ClaudeTaskManager._run_qa references these by module-global
+# name; without them every completed task raised NameError inside _run_qa's
+# except block, which logged and swallowed it — silently disabling QA, retries,
+# follow-up suggestions and success tracking.
+qa_agent = QAAgent()
+success_tracker = SuccessTracker()
 
 # Usage tracking — logs every call with timestamp, persists to disk
 _USAGE_FILE = Path(__file__).parent / "data" / "usage_log.jsonl"

@@ -160,15 +160,51 @@ async def test_browser_research(browser):
 # ── Action Detection ─────────────────────────────────────────────────
 
 
-def test_browse_action_keywords():
-    """Action keywords include browse-related terms."""
-    from server import ACTION_KEYWORDS
+# Browse detection used to be keyword matching against a server.ACTION_KEYWORDS
+# dict. That was replaced by LLM-emitted [ACTION:X] tags parsed by
+# extract_action(), and the old constant no longer exists — these cover the
+# mechanism that replaced it.
 
-    assert "browse" in ACTION_KEYWORDS
-    browse_keywords = ACTION_KEYWORDS["browse"]
-    assert "search for" in browse_keywords
-    assert "look up" in browse_keywords
-    assert "google" in browse_keywords
+
+def test_extract_browse_action_tag():
+    """[ACTION:BROWSE] is parsed into an action dict with its target."""
+    from server import extract_action
+
+    clean, action = extract_action("Right away, sir. [ACTION:BROWSE] weather in Austin")
+
+    assert action is not None
+    assert action["action"] == "browse"
+    assert action["target"] == "weather in Austin"
+    # The tag is stripped so it never reaches text-to-speech.
+    assert "[ACTION:" not in clean
+    assert clean == "Right away, sir."
+
+
+def test_extract_action_returns_none_without_a_tag():
+    """Ordinary conversation is passed through untouched."""
+    from server import extract_action
+
+    text = "The weather is fine today, sir."
+    clean, action = extract_action(text)
+
+    assert action is None
+    assert clean == text
+
+
+def test_extract_action_recognises_each_supported_type():
+    """Every advertised action tag parses to its lowercase action name."""
+    from server import extract_action
+
+    for tag, expected in [
+        ("BUILD", "build"),
+        ("BROWSE", "browse"),
+        ("RESEARCH", "research"),
+        ("OPEN_TERMINAL", "open_terminal"),
+        ("SCREEN", "screen"),
+    ]:
+        _, action = extract_action(f"Certainly. [ACTION:{tag}] do the thing")
+        assert action is not None, f"{tag} should parse"
+        assert action["action"] == expected
 
 
 # ── Browser Lifecycle ─────────────────────────────────────────────────
