@@ -4,9 +4,18 @@ name: Tests
 # `conda env update --file environment.yml` against an environment.yml this
 # repo has never contained. JARVIS is a pip project with requirements.txt.
 
+# A bare `push` + `pull_request` pair runs every PR branch twice. Restricting
+# push to main means one run per PR instead of two.
 on:
   push:
+    branches: [main]
   pull_request:
+
+# Superseded runs are cancelled rather than left to finish, so a burst of
+# pushes doesn't queue a backlog of obsolete jobs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
