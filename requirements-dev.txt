@@ -1,0 +1,10 @@
+# Development and CI dependencies.
+# Runtime deps live in requirements.txt; install both to run the test suite:
+#     pip install -r requirements.txt -r requirements-dev.txt
+
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+
+# Lint. CI blocks only on E9,F63,F7,F82 (syntax errors and undefined names)
+# and treats the rest as advisory.
+flake8>=7.0.0

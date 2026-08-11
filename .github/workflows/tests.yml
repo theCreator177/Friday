@@ -1,0 +1,50 @@
+name: Tests
+
+# Replaces the generated "Python Package using Conda" workflow, which called
+# `conda env update --file environment.yml` against an environment.yml this
+# repo has never contained. JARVIS is a pip project with requirements.txt.
+
+# A bare `push` + `pull_request` pair runs every PR branch twice. Restricting
+# push to main means one run per PR instead of two.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Superseded runs are cancelled rather than left to finish, so a burst of
+# pushes doesn't queue a backlog of obsolete jobs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.12']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Lint (blocking — syntax errors and undefined names)
+        run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+
+      - name: Lint (advisory)
+        run: flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+      - name: Test
+        # Tests needing network, Playwright browsers, or macOS skip themselves.
+        run: pytest -q
