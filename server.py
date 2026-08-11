@@ -185,7 +185,10 @@ ACTION SYSTEM:
 When you decide the user needs something DONE (not just discussed), include an action tag in your response:
 - [ACTION:SCREEN] — capture and describe what's visible on the user's screen. Use when user says "look at my screen", "what's running", "what do you see", etc. Do NOT use PROMPT_PROJECT for screen requests.
 - [ACTION:BUILD] description — when user wants a project built. Claude Code does the work.
-- [ACTION:BROWSE] url or search query — when user wants to see a webpage or search result in Chrome
+- [ACTION:BROWSE] url or search query — when user wants to SEE a webpage or search result in Chrome
+- [ACTION:REACH] url — when user wants to KNOW what a page SAYS rather than look at it. You read it and can then answer questions about it. Use for "what does this say", "summarize this link", "read me that article", "what's in this repo/thread/post". Works on GitHub, X/Twitter, YouTube, Reddit, LinkedIn, and any ordinary URL.
+  "what does this article say" → [ACTION:REACH] https://example.com/article
+  BROWSE puts it on his screen; REACH puts it in your head. If he wants to discuss it, REACH.
 - [ACTION:RESEARCH] detailed research brief — when user wants real research with real data. Claude Code will browse the web, find real listings/data, and create a report document. Give it a detailed brief of what to find.
 - [ACTION:OPEN_TERMINAL] — when user just wants a fresh Claude Code terminal with no specific project
 CRITICAL: When the user asks about their SCREEN, what's RUNNING, or what they're LOOKING AT — ALWAYS use [ACTION:SCREEN] or let the fast action system handle it. NEVER use [ACTION:PROMPT_PROJECT] for screen requests. PROMPT_PROJECT is ONLY for working on code projects.
@@ -814,7 +817,7 @@ def extract_action(response: str) -> tuple[str, dict | None]:
     Returns (clean_text_for_tts, action_dict_or_none).
     """
     match = _action_re.search(
-        r'\[ACTION:(BUILD|BROWSE|RESEARCH|OPEN_TERMINAL|PROMPT_PROJECT|ADD_TASK|ADD_NOTE|COMPLETE_TASK|REMEMBER|CREATE_NOTE|READ_NOTE|SCREEN)\]\s*(.*?)$',
+        r'\[ACTION:(BUILD|BROWSE|REACH|RESEARCH|OPEN_TERMINAL|PROMPT_PROJECT|ADD_TASK|ADD_NOTE|COMPLETE_TASK|REMEMBER|CREATE_NOTE|READ_NOTE|SCREEN)\]\s*(.*?)$',
         response, _action_re.DOTALL,
     )
     if match:
@@ -843,6 +846,76 @@ async def _execute_browse(target: str):
             await open_browser(f"https://www.google.com/search?q={quote(target)}")
     except Exception as e:
         log.error(f"Browse execution failed: {e}")
+
+
+async def _execute_reach(target: str, ws=None, history: list | None = None):
+    """Execute an [ACTION:REACH] tag — read a page and speak what it says.
+
+    BROWSE opens a URL on screen; REACH brings the text back so JARVIS can
+    actually answer about it. Runs as a background task: reads can take
+    seconds, and the voice loop must not stall waiting on one.
+    """
+    try:
+        from hermes import hermes
+
+        result = await hermes.read(target)
+
+        if not result.ok:
+            log.warning(f"Reach failed for {target}: {result.error}")
+            notify_text = f"I couldn't read that page, sir. {result.error}."
+        else:
+            # Put the page in history so follow-up questions have it in context.
+            if history is not None:
+                label = result.title or result.url
+                history.append({
+                    "role": "assistant",
+                    "content": f"[Page read via {result.backend} — {label}]\n\n{result.text}",
+                })
+
+            summary = await synthesize_page_summary(result)
+            notify_text = summary or f"I've read {result.title or 'the page'}, sir."
+
+        if ws:
+            try:
+                audio = await synthesize_speech(notify_text)
+                if audio:
+                    await ws.send_json({"type": "status", "state": "speaking"})
+                    await ws.send_json({
+                        "type": "audio",
+                        "data": base64.b64encode(audio).decode(),
+                        "text": notify_text,
+                    })
+                    await ws.send_json({"type": "status", "state": "idle"})
+                    log.info(f"JARVIS: {notify_text}")
+            except Exception:
+                pass  # WebSocket might be gone
+
+    except Exception as e:
+        log.error(f"Reach execution failed: {e}")
+
+
+async def synthesize_page_summary(result) -> str:
+    """One or two sentences about a page just read, in JARVIS's voice."""
+    if not anthropic_client:
+        return ""
+    try:
+        msg = await anthropic_client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=150,
+            system=(
+                "You are JARVIS. Summarise what this page says in ONE or TWO "
+                "sentences, spoken aloud to your employer. British butler, dry, "
+                "economical. No preamble, no markdown, no [ACTION:] tags."
+            ),
+            messages=[{
+                "role": "user",
+                "content": f"Page: {result.title or result.url}\n\n{result.text[:4000]}",
+            }],
+        )
+        return msg.content[0].text.strip()
+    except Exception as e:
+        log.warning(f"Page summary failed: {e}")
+        return ""
 
 
 async def _execute_research(target: str, ws=None):
@@ -1440,6 +1513,21 @@ app.add_middleware(
 @app.get("/api/health")
 async def health():
     return {"status": "online", "name": "JARVIS", "version": "0.1.0"}
+
+
+@app.get("/api/reach")
+async def reach_status():
+    """Which platforms Hermes can currently read, and by what backend."""
+    from hermes import hermes
+
+    statuses = await hermes.availability()
+    return {
+        "agent_reach": hermes.has_agent_reach,
+        "live": sorted(n for n, s in statuses.items() if s.live),
+        "fallback": sorted(n for n, s in statuses.items() if s.available and not s.live),
+        "unavailable": sorted(n for n, s in statuses.items() if not s.available),
+        "channels": {n: s.to_dict() for n, s in statuses.items()},
+    }
 
 
 @app.get("/api/tts-test")
@@ -2282,6 +2370,10 @@ async def voice_handler(ws: WebSocket):
                                     )
                                 elif embedded_action["action"] == "browse":
                                     asyncio.create_task(_execute_browse(embedded_action["target"]))
+                                elif embedded_action["action"] == "reach":
+                                    asyncio.create_task(
+                                        _execute_reach(embedded_action["target"], ws, history)
+                                    )
                                 elif embedded_action["action"] == "research":
                                     # Research enters work mode too
                                     name = _generate_project_name(embedded_action["target"])

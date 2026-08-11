@@ -35,6 +35,7 @@ When a user clones this repo and starts Claude Code, help them:
 - `notes_access.py` — Apple Notes integration
 - `actions.py` — System actions (Terminal, Chrome, Claude Code)
 - `browser.py` — Playwright web automation
+- `hermes.py` — Reach layer: URL → readable text (cross-platform, no AppleScript)
 - `work_mode.py` — Persistent Claude Code sessions
 
 ## Environment Variables
@@ -44,10 +45,28 @@ When a user clones this repo and starts Claude Code, help them:
 - `USER_NAME` (optional) — Your name for JARVIS to use
 - `CALENDAR_ACCOUNTS` (optional) — Comma-separated calendar emails
 
+## Reach (hermes.py)
+Reads a URL and brings the text back into the conversation, so JARVIS can answer
+about a page instead of only opening one. `[ACTION:BROWSE]` puts a page on screen;
+`[ACTION:REACH]` puts it in his head.
+
+- Routes URLs to a platform (GitHub, X, YouTube, Reddit, LinkedIn, …) using the
+  optional [Agent Reach](https://github.com/Panniantong/Agent-Reach) channel table.
+- Agent Reach is an *installer and doctor*, not a fetch library — its channels
+  answer `can_handle()`/`check()` and, bar one, do not read. Hermes is the runtime
+  layer it deliberately omits.
+- Reads through a channel's own backend when one is live; otherwise Jina Reader,
+  which needs no key and handles any URL. Reach is therefore never zero.
+- Optional install for richer backends: `pip install agent-reach` (then
+  `agent-reach doctor`). Without it, routing uses a built-in host table.
+- `GET /api/reach` reports which channels are live, on fallback, or unavailable.
+- Pure Python + httpx — no AppleScript, so this half of the stack already runs on
+  macOS, Windows, and Linux.
+
 ## Conventions
 - JARVIS personality: British butler, dry wit, economy of language
 - Max 1-2 sentences per voice response
-- Action tags: [ACTION:BUILD], [ACTION:BROWSE], [ACTION:RESEARCH], etc.
+- Action tags: [ACTION:BUILD], [ACTION:BROWSE], [ACTION:REACH], [ACTION:RESEARCH], etc.
 - AppleScript for all macOS integrations (no OAuth needed)
 - Read-only for Mail (safety by design)
 - SQLite for all local data storage
